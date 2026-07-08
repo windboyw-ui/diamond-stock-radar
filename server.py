@@ -1072,6 +1072,37 @@ def fetch_yahoo(symbol):
             return None, None
         hist.index = pd.to_datetime(hist.index).tz_localize(None)
         info = tk.info or {}
+
+        # ── 新版 yfinance (1.x) 目標價補充 ──
+        # targetLowPrice 等欄位已移至 analyst_price_targets
+        if not info.get("targetLowPrice") and not info.get("targetHighPrice"):
+            try:
+                apt = tk.analyst_price_targets or {}
+                if apt.get("low"):    info["targetLowPrice"]    = apt["low"]
+                if apt.get("high"):   info["targetHighPrice"]   = apt["high"]
+                if apt.get("mean"):   info["targetMeanPrice"]   = apt["mean"]
+                if apt.get("median"): info["targetMedianPrice"] = apt["median"]
+            except Exception:
+                pass
+
+        # ── 分析師人數與評級補充 ──
+        if not info.get("numberOfAnalystOpinions") and not info.get("recommendationKey"):
+            try:
+                rs = tk.recommendations_summary
+                if rs is not None and not rs.empty:
+                    latest = rs.iloc[0]
+                    buys   = int(latest.get("strongBuy",0))  + int(latest.get("buy",0))
+                    holds  = int(latest.get("hold",0))
+                    sells  = int(latest.get("sell",0))        + int(latest.get("strongSell",0))
+                    total  = buys + holds + sells
+                    if total > 0:
+                        info["numberOfAnalystOpinions"] = total
+                        if buys  / total >= 0.5: info["recommendationKey"] = "buy"
+                        elif holds/ total >= 0.5: info["recommendationKey"] = "hold"
+                        elif sells/ total >= 0.5: info["recommendationKey"] = "sell"
+            except Exception:
+                pass
+
         return hist, info
     except:
         return None, None
@@ -1231,6 +1262,43 @@ def get_stock_data(symbol):
         rec_key    = info_yf.get("recommendationKey","")
         rec_map    = {"strong_buy":"強力買進","buy":"買進","hold":"持有","underperform":"表現落後","sell":"賣出","":"無評級"}
         recommend_str = rec_map.get(rec_key, rec_key)
+
+        # ── 新版 yfinance (1.x)：目標價移至 analyst_price_targets ──
+        # 若 info 裡沒有目標價，改用新 API 補充
+        if not tp_low and not tp_high:
+            try:
+                apt = yf.Ticker(symbol).analyst_price_targets or {}
+                tp_low    = apt.get("low")    or None
+                tp_high   = apt.get("high")   or None
+                tp_mean   = apt.get("mean")   or None
+                tp_median = apt.get("median") or None
+            except Exception:
+                pass
+
+        # ── 分析師人數與評級：新版從 recommendations_summary 取得 ──
+        if analyst_count == 0 or rec_key == "":
+            try:
+                rs = yf.Ticker(symbol).recommendations_summary
+                if rs is not None and not rs.empty:
+                    # recommendations_summary 欄位：period/strongBuy/buy/hold/sell/strongSell
+                    latest = rs.iloc[0]
+                    total = int(sum([
+                        latest.get("strongBuy",0), latest.get("buy",0),
+                        latest.get("hold",0), latest.get("sell",0),
+                        latest.get("strongSell",0)
+                    ]))
+                    if analyst_count == 0:
+                        analyst_count = total
+                    if rec_key == "":
+                        buys  = int(latest.get("strongBuy",0)) + int(latest.get("buy",0))
+                        holds = int(latest.get("hold",0))
+                        sells = int(latest.get("sell",0)) + int(latest.get("strongSell",0))
+                        if total > 0:
+                            if buys / total >= 0.5:    recommend_str = "買進"
+                            elif holds / total >= 0.5: recommend_str = "持有"
+                            elif sells / total >= 0.5: recommend_str = "賣出"
+            except Exception:
+                pass
         if eps_fwd and eps_trail and eps_trail != 0:
             eps_growth = round((eps_fwd - eps_trail) / abs(eps_trail) * 100, 1)
 
